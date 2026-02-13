@@ -92,7 +92,6 @@ def main():
     print(f"  Tiempo estimado: ~{EXPECTED_BYTES//960}s (@9600bps)")
     print("=" * 50)
     print()
-    print("INSTRUCCIONES:")
     print("  1. Este script DEBE ejecutarse PRIMERO")
     print("  2. Luego ejecuta 'python raw.py' en la Raspberry")
     print("=" * 50)
