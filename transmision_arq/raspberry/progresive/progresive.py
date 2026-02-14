@@ -107,7 +107,7 @@ def fragment_image(jpeg_data, img_id=0):
         if len(payload) < PAYLOAD_SIZE:
             payload += b'\x00' * (PAYLOAD_SIZE - len(payload))
 
-        header = struct.pack('BHH', img_id, seq, total_chunks)
+        header = struct.pack('<BHH', img_id, seq, total_chunks)
         chunks.append(header + payload)
 
     t_fragment = time.time() - t_start
