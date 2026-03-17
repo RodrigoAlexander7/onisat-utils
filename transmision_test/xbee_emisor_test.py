@@ -19,4 +19,4 @@ while True:
     print("Enviado:", valor)
 
     valor = (valor + 1) % 256
-    time.sleep(1)
+    time.sleep(0.1)
