@@ -1,6 +1,6 @@
 """
-Test the fisheye left-camera calibration.
-Loads calibration.npz, undistorts the left half of each side-by-side image.
+Test the fisheye dual-camera calibration.
+Loads calibration.npz, undistorts the left and right halves of each side-by-side image.
 
 Usage:
     python test_calibration.py                     # uses first image from camera_test/
@@ -23,10 +23,18 @@ HALF_W           = 1280
 def load_calibration():
     d = np.load(CALIBRATION_FILE)
     img_size = tuple(d["img_size"].tolist())
-    return d["K"], d["D"], img_size
+    
+    K_L = d["K_L"] if "K_L" in d else d["K"] if "K" in d else None
+    D_L = d["D_L"] if "D_L" in d else d["D"] if "D" in d else None
+    K_R = d["K_R"] if "K_R" in d else None
+    D_R = d["D_R"] if "D_R" in d else None
+    
+    return K_L, D_L, K_R, D_R, img_size
 
 
 def build_undistort_map(K, D, img_size):
+    if K is None or D is None:
+        return None, None
     K_new = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(
         K, D, img_size, np.eye(3), balance=0.0
     )
@@ -36,17 +44,33 @@ def build_undistort_map(K, D, img_size):
     return map1, map2
 
 
-def process(path, map1, map2, show=True):
+def process(path, map1_l, map2_l, map1_r, map2_r, show=True):
     img = cv2.imread(path)
     if img is None:
         print(f"Cannot read: {path}")
         return True
 
     left = img[:, :HALF_W]
-    undistorted = cv2.remap(left, map1, map2, cv2.INTER_LINEAR)
+    right = img[:, HALF_W:]
+    
+    row_l, row_r = None, None
 
-    # side-by-side: original left | undistorted left
-    combined = np.hstack([left, undistorted])
+    if map1_l is not None:
+        undistorted_l = cv2.remap(left, map1_l, map2_l, cv2.INTER_LINEAR)
+        row_l = np.hstack([left, undistorted_l])
+        
+    if map1_r is not None:
+        undistorted_r = cv2.remap(right, map1_r, map2_r, cv2.INTER_LINEAR)
+        row_r = np.hstack([right, undistorted_r])
+
+    if row_l is not None and row_r is not None:
+        combined = np.vstack([row_l, row_r])
+    elif row_l is not None:
+        combined = row_l
+    elif row_r is not None:
+        combined = row_r
+    else:
+        return True
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     out_path = os.path.join(OUTPUT_DIR, os.path.basename(path))
@@ -54,7 +78,10 @@ def process(path, map1, map2, show=True):
     print(f"Saved → {out_path}")
 
     if show:
-        cv2.imshow("Original left | Undistorted left  (any key = next, q = quit)", combined)
+        # Resize if combined is too large, it might not fit on standard screens
+        scale = 0.5
+        display_img = cv2.resize(combined, (int(combined.shape[1] * scale), int(combined.shape[0] * scale)))
+        cv2.imshow("Original | Undistorted (Top: L, Bottom: R) (any key = next, q = quit)", display_img)
         key = cv2.waitKey(0) & 0xFF
         cv2.destroyAllWindows()
         return key != ord("q")
@@ -67,12 +94,16 @@ def main():
         print("Run calibrate.py first.")
         return
 
-    K, D, img_size = load_calibration()
-    map1, map2 = build_undistort_map(K, D, img_size)
+    K_L, D_L, K_R, D_R, img_size = load_calibration()
+    map1_l, map2_l = build_undistort_map(K_L, D_L, img_size)
+    map1_r, map2_r = build_undistort_map(K_R, D_R, img_size)
 
-    print(f"K:\n{K}")
-    print(f"D: {D.T}")
-    print()
+    if K_L is not None:
+        print(f"K_L:\n{K_L}")
+        print(f"D_L: {D_L.T}\n")
+    if K_R is not None:
+        print(f"K_R:\n{K_R}")
+        print(f"D_R: {D_R.T}\n")
 
     args = sys.argv[1:]
 
@@ -90,7 +121,7 @@ def main():
         )[:6]   # just the first image by default
 
     for path in images:
-        if not process(path, map1, map2):
+        if not process(path, map1_l, map2_l, map1_r, map2_r):
             break
 
 
