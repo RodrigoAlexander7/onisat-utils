@@ -1,3 +1,4 @@
+# minimal example to test cam shot
 import subprocess
 import time
 import os
