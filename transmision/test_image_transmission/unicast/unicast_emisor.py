@@ -5,6 +5,7 @@ import struct
 import sys
 import traceback
 import time
+from typing import Union
 
 from digi.xbee.devices import XBeeDevice, RemoteXBeeDevice
 from digi.xbee.models.address import XBee64BitAddress
@@ -14,7 +15,7 @@ from digi.xbee.exception import XBeeException, TimeoutException
 # =========================
 # CONFIGURACIÓN
 # =========================
-SERIAL_PORT = "/dev/serial0"
+SERIAL_PORT = "COM5"  
 BAUD_RATE = 115200
 
 # Dirección 64-bit del receptor: SH + SL
@@ -36,8 +37,11 @@ IMAGE_CHUNK_SIZE = 64
 APP_RETRIES = 2
 
 # Archivo a enviar
-IMAGE_PATH = "foto.jpg"
+IMAGE_PATH = Path(__file__).resolve().parent / "foto.jpg"
 IMAGE_ID = 1
+
+# Diagnóstico AT (opcional). Los XBee ya configurados en XCTU no requieren esto para operar.
+ENABLE_AT_DIAGNOSTICS = False
 
 
 def safe_get_parameter(xbee: XBeeDevice, param: str):
@@ -82,7 +86,7 @@ def build_chunks(image_bytes: bytes, chunk_size: int, image_id: int):
 def send_image_unicast(
     xbee: XBeeDevice,
     remote: RemoteXBeeDevice,
-    image_path: str,
+    image_path: Union[str, Path],
     image_id: int
 ) -> bool:
     """
@@ -100,17 +104,17 @@ def send_image_unicast(
     if payload_budget <= 0:
         raise RuntimeError("El tamaño de chunk es inválido.")
 
-    print(f"\n=== ENVÍO ===")
+    print("\n=== ENVÍO ===")
     print(f"Archivo: {image_file.resolve()}")
     print(f"Tamaño imagen: {len(image_bytes)} bytes")
     print(f"Chunk de datos: {payload_budget} bytes")
     print(f"Cabecera app: {APP_HEADER_SIZE} bytes")
     print(f"Total por paquete: {payload_budget + APP_HEADER_SIZE} bytes")
 
-    chunks = list(build_chunks(image_bytes, payload_budget, image_id))
-    print(f"Total chunks: {len(chunks)}\n")
+    total_chunks = ceil(len(image_bytes) / payload_budget)
+    print(f"Total chunks: {total_chunks}\n")
 
-    for seq, total_chunks, payload in chunks:
+    for seq, total_chunks, payload in build_chunks(image_bytes, payload_budget, image_id):
         sent = False
 
         for attempt in range(1, APP_RETRIES + 1):
@@ -155,16 +159,17 @@ def main():
 
         configure_xbee(xbee)
 
-        print("\n=== DIAGNÓSTICO AT ===")
-        safe_get_parameter(xbee, "AP")
-        safe_get_parameter(xbee, "BD")
-        safe_get_parameter(xbee, "ID")
-        safe_get_parameter(xbee, "CH")
-        safe_get_parameter(xbee, "MY")
-        safe_get_parameter(xbee, "SH")
-        safe_get_parameter(xbee, "SL")
-        safe_get_parameter(xbee, "VR")
-        safe_get_parameter(xbee, "HV")
+        if ENABLE_AT_DIAGNOSTICS:
+            print("\n=== DIAGNÓSTICO AT ===")
+            safe_get_parameter(xbee, "AP")
+            safe_get_parameter(xbee, "BD")
+            safe_get_parameter(xbee, "ID")
+            safe_get_parameter(xbee, "CH")
+            safe_get_parameter(xbee, "MY")
+            safe_get_parameter(xbee, "SH")
+            safe_get_parameter(xbee, "SL")
+            safe_get_parameter(xbee, "VR")
+            safe_get_parameter(xbee, "HV")
 
         remote = RemoteXBeeDevice(
             xbee,

@@ -3,10 +3,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from math import ceil
 from pathlib import Path
 from struct import Struct
-from threading import Event, Lock
+from threading import Event, Lock, Thread
 from time import monotonic, sleep
 from typing import Dict, Tuple
 
@@ -14,9 +13,9 @@ from digi.xbee.devices import XBeeDevice
 from digi.xbee.exception import XBeeException
 
 
-SERIAL_PORT = "/dev/ttyUSB0"   # puerto USB del Arduino
-BAUD_RATE = 115200             # debe coincidir con Serial.begin() del sketch
-OUTPUT_DIR = Path("received_images")
+SERIAL_PORT = "COM3"   # puerto USB del XBee receptor
+BAUD_RATE = 115200     # debe coincidir con BD en XCTU
+OUTPUT_DIR = Path(__file__).resolve().parent / "received_images"
 STALE_BUFFER_TIMEOUT_S = 300
 
 APP_HEADER = Struct(">BHH")    # [image_id:1][seq:2][total_chunks:2]
@@ -68,7 +67,8 @@ def cleanup_stale_buffers() -> None:
 def on_data_received(xbee_message) -> None:
     try:
         data = bytes(xbee_message.data)
-        sender = str(xbee_message.remote_device.get_64bit_addr())
+        remote = getattr(xbee_message, "remote_device", None)
+        sender = str(remote.get_64bit_addr()) if remote else "UNKNOWN"
         is_broadcast = bool(getattr(xbee_message, "is_broadcast", False))
 
         if len(data) < APP_HEADER_SIZE:
@@ -130,8 +130,9 @@ def main() -> int:
 
         print("Receptor listo. Esperando fragmentos...")
         print("Ctrl+C para salir.")
+        print(f"Puerto: {SERIAL_PORT} | Baud: {BAUD_RATE}")
 
-        cleaner = __import__("threading").Thread(target=cleanup_stale_buffers, daemon=True)
+        cleaner = Thread(target=cleanup_stale_buffers, daemon=True)
         cleaner.start()
 
         while not stop_event.is_set():

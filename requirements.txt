@@ -3,3 +3,6 @@ numpy
 Pillow
 pyserial
 opencv-python
+digi-xbee
+
+# emisor es COM4y receptor es COM3
