@@ -10,6 +10,10 @@ import time
 import struct
 import os
 import sys
+import io
+from PIL import Image
+import reedsolo
+import base64
 
 # ── Serial port ──────────────────────────────────────────────────────────────
 PORT       = "COM3"        # Change to your port (Linux: "/dev/ttyUSB0")
@@ -21,7 +25,8 @@ DEST_ADDR_64 = bytes.fromhex("0013A200406EFB43")
 # ── Protocol ─────────────────────────────────────────────────────────────────
 MAGIC       = b'\xAB\xCD'   # 2-byte packet identifier
 HEADER_SIZE = 6             # magic(2) + chunk_index(2) + total_chunks(2)
-CHUNK_SIZE  = 80            # bytes of image data per packet
+CHUNK_SIZE  = 40            # Modificado a 40 para tener holgura al codificar en Base64
+ECC_SIZE    = 16            # bytes de paridad Reed-Solomon
 INTER_PACKET_DELAY = 0.05   # 50 ms between packets (give receiver time)
 
 # ── XBee API helpers ──────────────────────────────────────────────────────────
@@ -29,12 +34,23 @@ INTER_PACKET_DELAY = 0.05   # 50 ms between packets (give receiver time)
 def build_tx64_frame(frame_id: int, dest64: bytes, data: bytes) -> bytes:
     """Build a TX Request (64-bit address) API frame — frame type 0x00."""
     options = 0x00  # 0x01 = disable ACK; keep 0x00 to use RR retries
-    frame_data = bytes([0x00, frame_id]) + dest64 + bytes([options]) + data
-    length     = len(frame_data)
-    checksum   = (0xFF - (sum(frame_data) & 0xFF)) & 0xFF
+    
+    # Bucle anti-colisiones para el hardware en modo AP=1 
+    # El hardware aborta si detecta un falso '0x7E' en el length o checksum
+    while True:
+        frame_data = bytes([0x00, frame_id]) + dest64 + bytes([options]) + data
+        length     = len(frame_data)
+        length_bytes = struct.pack('>H', length)
+        checksum   = (0xFF - (sum(frame_data) & 0xFF)) & 0xFF
+        
+        if b'\x7E' in length_bytes or checksum == 0x7E:
+            data += b' ' # Spacer safe en base64 para desincronizar la suma
+        else:
+            break
+
     return (
         b'\x7E'
-        + struct.pack('>H', length)
+        + length_bytes
         + frame_data
         + bytes([checksum])
     )
@@ -74,8 +90,18 @@ def transmit_image(image_path: str):
         print(f"[ERROR] File not found: {image_path}")
         sys.exit(1)
 
-    with open(image_path, 'rb') as f:
-        image_data = f.read()
+    print(f"[INFO] Re-configurando imagen en memoria con marcadores RST...")
+    try:
+        with Image.open(image_path) as img:
+            img_byte_arr = io.BytesIO()
+            # Añadir marcadores restart cada 16 MCUs (bloques)
+            img.save(img_byte_arr, format='JPEG', restart_marker_blocks=16)
+            image_data = img_byte_arr.getvalue()
+    except Exception as e:
+        print(f"[ERROR] No se pudo procesar la imagen con Pillow: {e}")
+        # Retorno de emergencia a lectura plana si el format falla
+        with open(image_path, 'rb') as f:
+            image_data = f.read()
 
     file_size = len(image_data)
     chunks    = [image_data[i:i + CHUNK_SIZE]
@@ -91,12 +117,20 @@ def transmit_image(image_path: str):
         time.sleep(0.1)         # let port settle
         ser.reset_input_buffer()
 
+        rs = reedsolo.RSCodec(ECC_SIZE)
+
         for idx, chunk in enumerate(chunks):
             # Build payload: MAGIC + chunk_index (2B) + total (2B) + data
-            payload = (MAGIC
-                       + struct.pack('>H', idx)
-                       + struct.pack('>H', total)
-                       + chunk)
+            base_payload = (MAGIC
+                            + struct.pack('>H', idx)
+                            + struct.pack('>H', total)
+                            + chunk)
+            
+            # Anexar Código de Corrección de Errores (Reed-Solomon)
+            rs_payload = rs.encode(base_payload)
+            
+            # Envolver en Base64 para erradicar apariciones internas nativas de byte 0x7E
+            payload = base64.b64encode(rs_payload)
 
             frame_id = (idx % 255) + 1  # 1-255; 0 = no ACK
             frame    = build_tx64_frame(frame_id, DEST_ADDR_64, payload)
